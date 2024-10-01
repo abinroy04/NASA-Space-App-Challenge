@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Landsat Data Comparison</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Select a Location on the Map</h1>
+    <p id="coordinates">Coordinates: None</p>
+    <div id="map"></div>
+    
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([20, 0], 2);  // Default to a global view
+
+        // Load and display a map tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Variable to store the selected location
+        var selectedMarker;
+
+        // On map click, place a marker and show coordinates
+        function onMapClick(e) {
+            var coords = e.latlng;
+            // Update the coordinates display
+            document.getElementById('coordinates').innerHTML = 'Coordinates: ' + coords.lat + ', ' + coords.lng;
+            
+            // Remove the previous marker if it exists
+            if (selectedMarker) {
+                map.removeLayer(selectedMarker);
+            }
+
+            // Add a marker at the clicked location
+            selectedMarker = L.marker([coords.lat, coords.lng]).addTo(map);
+        }
+
+        map.on('click', onMapClick);
+    </script>
+</body>
+</html>
