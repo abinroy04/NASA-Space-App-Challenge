@@ -80,3 +80,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fetchSavedLocations();
 });
+
+document.getElementById('submit-location').addEventListener('click', () => {
+    const latitude = document.getElementById('latitude').value;
+    const longitude = document.getElementById('longitude').value;
+    const cloudCoverage = document.getElementById('cloud-coverage').value;
+
+    if (latitude && longitude) {
+        fetch('/get_landsat_data', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                latitude: latitude,
+                longitude: longitude,
+                cloud_coverage_threshold: cloudCoverage
+            }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.data.length > 0) {
+                const resultDiv = document.getElementById('result');
+                let htmlContent = '<h3>Available Landsat Data:</h3><ul>';
+                data.data.forEach(scene => {
+                    htmlContent += `<li>Date: ${scene.date}, Cloud Coverage: ${scene.cloud_coverage}%</li>`;
+                });
+                htmlContent += '</ul>';
+                resultDiv.innerHTML = htmlContent;
+            } else {
+                resultDiv.textContent = 'No available Landsat scenes for this location and cloud coverage threshold.';
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    } else {
+        alert('Please enter both latitude and longitude.');
+    }
+});
