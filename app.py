@@ -70,6 +70,18 @@ def load_user(user_id):
 def index():
     return render_template('index.html')
 
+def get_landsat_sr_data(latitude, longitude, date):
+    url = f"https://landsatlook.usgs.gov/data/v1/sr?lat={latitude}&lon={longitude}&date={date}"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return data
+    except requests.RequestException as e:
+        print(f"Error fetching Landsat SR data: {e}")
+        return None
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
@@ -112,6 +124,41 @@ def logout():
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
 
+app.route('/get_landsat_data', methods=['POST'])
+def get_landsat_data():
+    data = request.json
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+    cloud_coverage_threshold = data.get('cloud_coverage_threshold')
+
+    # Replace with actual Landsat API URL and parameters
+    # For now, we'll simulate it with a placeholder API endpoint
+    landsat_api_url = f"https://api.landsat-imaginary.com/get-data?lat={latitude}&lon={longitude}&cloud_cover={cloud_coverage_threshold}"
+    
+    try:
+        response = requests.get(landsat_api_url)
+        landsat_data = response.json()
+
+        # Filter the results based on the cloud coverage threshold
+        filtered_data = [
+            scene for scene in landsat_data['scenes']
+            if scene['cloud_coverage'] <= cloud_coverage_threshold
+        ]
+
+        if filtered_data:
+            return jsonify({
+                'message': 'Landsat data fetched successfully.',
+                'data': filtered_data
+            })
+        else:
+            return jsonify({
+                'message': 'No Landsat scenes found for the given parameters.',
+                'data': []
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 def get_landsat_overpasses(latitude, longitude, start_date, end_date):
     url = "https://landsat.usgs.gov/landsat_acquisition_api/v1/acqs"
     
@@ -153,6 +200,9 @@ def submit_location():
     name = data.get('name', f"Location at {latitude}, {longitude}")
     notification_lead_time = data.get('notification_lead_time', 24)
     cloud_coverage_threshold = data.get('cloud_coverage_threshold', 15.0)
+    date = datetime.now().strftime("%Y-%m-%d")
+    sr_data = get_landsat_sr_data(latitude, longitude, date)
+
     
     new_location = Location(
         name=name,
@@ -172,7 +222,8 @@ def submit_location():
     return jsonify({
         'message': f'Saved location: {name}',
         'location': new_location.to_dict(),
-        'overpasses': overpasses
+        'overpasses': overpasses,
+        'sr_data': sr_data
     })
 
 def check_and_notify():
