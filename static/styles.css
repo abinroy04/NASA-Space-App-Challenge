@@ -1,0 +1,21 @@
+body {
+    font-family: Arial, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+}
+
+#app {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+#map {
+    height: 400px;
+    margin-bottom: 20px;
+}
+
+input, button {
+    margin: 10px 0;
+    padding: 5px;
+}
