@@ -1,36 +1,30 @@
 from flask import Flask, render_template, request, jsonify
-import requests
-from datetime import datetime, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+import requests
+from datetime import datetime, timedelta
+import os
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///landsat_app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'fallback_secret_key')
 db = SQLAlchemy(app)
 
-with app.app_context():
-    db.create_all()
-
-app.config['MAIL_SERVER'] = 'smtp.example.com'  # Replace with your SMTP server
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = 'your_email@example.com'  # Replace with your email
-app.config['MAIL_PASSWORD'] = 'your_password'  # Replace with your password
+app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.example.com')
+app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'your_email@example.com')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'your_password')
 
 mail = Mail(app)
 
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-
-
-@app.route('/')
-def index():
-    return render_template('index.html')
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -49,8 +43,9 @@ class Location(db.Model):
     name = db.Column(db.String(100), nullable=False)
     latitude = db.Column(db.Float, nullable=False)
     longitude = db.Column(db.Float, nullable=False)
-    email = db.Column(db.String(120), nullable=False)
     notify = db.Column(db.Boolean, default=True)
+    notification_lead_time = db.Column(db.Integer, default=24)  # in hours
+    cloud_coverage_threshold = db.Column(db.Float, default=15.0)  # in percentage
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     user = db.relationship('User', backref=db.backref('locations', lazy=True))
@@ -61,8 +56,9 @@ class Location(db.Model):
             'name': self.name,
             'latitude': self.latitude,
             'longitude': self.longitude,
-            'email': self.email,
             'notify': self.notify,
+            'notification_lead_time': self.notification_lead_time,
+            'cloud_coverage_threshold': self.cloud_coverage_threshold,
             'created_at': self.created_at.isoformat()
         }
 
@@ -70,8 +66,10 @@ class Location(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-# Add these new routes for user authentication
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
@@ -114,18 +112,12 @@ def logout():
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
 
-def get_landsat_overpasses(latitude, longitude):
-    # USGS Landsat Acquisition Tool API endpoint
+def get_landsat_overpasses(latitude, longitude, start_date, end_date):
     url = "https://landsat.usgs.gov/landsat_acquisition_api/v1/acqs"
     
-    # Calculate date range (next 16 days)
-    start_date = datetime.now().strftime("%Y-%m-%d")
-    end_date = (datetime.now() + timedelta(days=16)).strftime("%Y-%m-%d")
-    
-    # Prepare request parameters
     params = {
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
         "lat": latitude,
         "lng": longitude,
         "satellite": "landsat_8_9"
@@ -133,10 +125,9 @@ def get_landsat_overpasses(latitude, longitude):
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
         data = response.json()
         
-        # Process and format the overpass times
         overpasses = []
         for acq in data['results']:
             overpass_time = datetime.fromisoformat(acq['acquisition_date'].replace('Z', '+00:00'))
@@ -144,9 +135,8 @@ def get_landsat_overpasses(latitude, longitude):
         
         return overpasses
     except requests.RequestException as e:
-        print(f"API request failed: {e}")
+        print(f"Error fetching Landsat overpass data: {e}")
         return []
-
 
 @app.route('/get_locations', methods=['GET'])
 @login_required
@@ -154,26 +144,6 @@ def get_locations():
     locations = Location.query.filter_by(user=current_user).order_by(Location.created_at.desc()).all()
     return jsonify([location.to_dict() for location in locations])
 
-
-def check_and_notify():
-    with app.app_context():
-        locations = Location.query.filter_by(notify=True).all()
-        for location in locations:
-            overpasses = get_landsat_overpasses(location.latitude, location.longitude)
-            if overpasses:
-                next_pass = overpasses[0]
-                message = Message("Upcoming Landsat Pass",
-                                  sender="your_email@example.com",
-                                  recipients=[location.email])
-                message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location.name}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
-                mail.send(message)
-
-# Set up the scheduler
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=check_and_notify, trigger="interval", hours=24)
-scheduler.start()
-
-# Modify the submit_location function to include email
 @app.route('/submit_location', methods=['POST'])
 @login_required
 def submit_location():
@@ -181,12 +151,23 @@ def submit_location():
     latitude = data.get('latitude')
     longitude = data.get('longitude')
     name = data.get('name', f"Location at {latitude}, {longitude}")
+    notification_lead_time = data.get('notification_lead_time', 24)
+    cloud_coverage_threshold = data.get('cloud_coverage_threshold', 15.0)
     
-    new_location = Location(name=name, latitude=latitude, longitude=longitude, user=current_user)
+    new_location = Location(
+        name=name,
+        latitude=latitude,
+        longitude=longitude,
+        user=current_user,
+        notification_lead_time=notification_lead_time,
+        cloud_coverage_threshold=cloud_coverage_threshold
+    )
     db.session.add(new_location)
     db.session.commit()
     
-    overpasses = get_landsat_overpasses(latitude, longitude)
+    start_date = datetime.now()
+    end_date = start_date + timedelta(days=16)
+    overpasses = get_landsat_overpasses(latitude, longitude, start_date, end_date)
     
     return jsonify({
         'message': f'Saved location: {name}',
@@ -194,10 +175,31 @@ def submit_location():
         'overpasses': overpasses
     })
 
+def check_and_notify():
+    with app.app_context():
+        locations = Location.query.filter_by(notify=True).all()
+        for location in locations:
+            start_date = datetime.now() + timedelta(hours=location.notification_lead_time)
+            end_date = start_date + timedelta(days=1)
+            overpasses = get_landsat_overpasses(location.latitude, location.longitude, start_date, end_date)
+            if overpasses:
+                next_pass = overpasses[0]
+                message = Message("Upcoming Landsat Pass",
+                                  sender=app.config['MAIL_USERNAME'],
+                                  recipients=[location.user.email])
+                message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location.name}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
+                mail.send(message)
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=check_and_notify, trigger="interval", hours=24)
+scheduler.start()
+
 @app.teardown_appcontext
 def shutdown_scheduler(error=None):
     if scheduler.running:
         scheduler.shutdown()
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True)
