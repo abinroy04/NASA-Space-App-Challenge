@@ -4,6 +4,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitButton = document.getElementById('submit-location');
     const resultDiv = document.getElementById('result');
     const locationNameInput = document.getElementById('location-name');
+    const cloudCoverageInput = document.getElementById('cloud-coverage');
+    const notificationLeadTimeInput = document.getElementById('notification-lead-time');
 
     // Initialize the map
     const map = L.map('map').setView([0, 0], 2);
@@ -28,6 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const latitude = latitudeInput.value;
         const longitude = longitudeInput.value;
         const name = locationNameInput.value || `Location at ${latitude}, ${longitude}`;
+        const cloudCoverage = cloudCoverageInput.value;
+        const notificationLeadTime = notificationLeadTimeInput.value;
     
         if (latitude && longitude) {
             fetch('/submit_location', {
@@ -35,7 +39,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ latitude, longitude, name }),
+                body: JSON.stringify({
+                    latitude,
+                    longitude,
+                    name,
+                    cloud_coverage_threshold: cloudCoverage,
+                    notification_lead_time: notificationLeadTime
+                }),
             })
             .then(response => response.json())
             .then(data => {
@@ -62,12 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(locations => {
                 const locationList = document.getElementById('saved-locations');
                 locationList.innerHTML = locations.map(loc => 
-                    `<li>${loc.name} (${loc.latitude}, ${loc.longitude})</li>`
+                    `<li>${loc.name} (${loc.latitude}, ${loc.longitude}) - Cloud coverage: ${loc.cloud_coverage_threshold}%, Notification lead time: ${loc.notification_lead_time}h</li>`
                 ).join('');
             })
             .catch(error => console.error('Error:', error));
     }
 
     fetchSavedLocations();
-
 });
