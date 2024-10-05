@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -7,13 +6,23 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 from datetime import datetime, timedelta
 import os
+import pymysql
+from pymysql.cursors import DictCursor
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///landsat_app.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'fallback_secret_key')
-db = SQLAlchemy(app)
 
+# Database configuration
+db_config = {
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'your_username'),
+    'password': os.environ.get('DB_PASSWORD', 'your_password'),
+    'db': os.environ.get('DB_NAME', 'landsat_app'),
+    'charset': 'utf8mb4',
+    'cursorclass': DictCursor
+}
+
+# Email configuration
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.example.com')
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
 app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
@@ -26,61 +35,32 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128))
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+class User(UserMixin):
+    def __init__(self, id, username, email, password_hash):
+        self.id = id
+        self.username = username
+        self.email = email
+        self.password_hash = password_hash
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-class Location(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    latitude = db.Column(db.Float, nullable=False)
-    longitude = db.Column(db.Float, nullable=False)
-    notify = db.Column(db.Boolean, default=True)
-    notification_lead_time = db.Column(db.Integer, default=24)  # in hours
-    cloud_coverage_threshold = db.Column(db.Float, default=15.0)  # in percentage
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    user = db.relationship('User', backref=db.backref('locations', lazy=True))
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'name': self.name,
-            'latitude': self.latitude,
-            'longitude': self.longitude,
-            'notify': self.notify,
-            'notification_lead_time': self.notification_lead_time,
-            'cloud_coverage_threshold': self.cloud_coverage_threshold,
-            'created_at': self.created_at.isoformat()
-        }
-
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+            if user:
+                return User(user['id'], user['username'], user['email'], user['password_hash'])
+    return None
+
+def get_db_connection():
+    return pymysql.connect(**db_config)
 
 @app.route('/')
 def index():
     return render_template('index.html')
-
-def get_landsat_sr_data(latitude, longitude, date):
-    url = f"https://landsatlook.usgs.gov/data/v1/sr?lat={latitude}&lon={longitude}&date={date}"
-
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        return data
-    except requests.RequestException as e:
-        print(f"Error fetching Landsat SR data: {e}")
-        return None
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -89,15 +69,21 @@ def register():
         email = request.form.get('email')
         password = request.form.get('password')
         
-        user = User.query.filter_by(username=username).first()
-        if user:
-            return jsonify({'error': 'Username already exists'}), 400
-        
-        new_user = User(username=username, email=email)
-        new_user.set_password(password)
-        db.session.add(new_user)
-        db.session.commit()
-        
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                if cursor.fetchone():
+                    return jsonify({'error': 'Username already exists'}), 400
+                
+                password_hash = generate_password_hash(password)
+                cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
+                               (username, email, password_hash))
+                conn.commit()
+                
+                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                user = cursor.fetchone()
+                
+        new_user = User(user['id'], user['username'], user['email'], user['password_hash'])
         login_user(new_user)
         return jsonify({'message': 'Registered successfully'})
     
@@ -109,9 +95,14 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
         
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            login_user(user)
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                user = cursor.fetchone()
+                
+        if user and check_password_hash(user['password_hash'], password):
+            user_obj = User(user['id'], user['username'], user['email'], user['password_hash'])
+            login_user(user_obj)
             return jsonify({'message': 'Logged in successfully'})
         
         return jsonify({'error': 'Invalid username or password'}), 401
@@ -124,6 +115,87 @@ def logout():
     logout_user()
     return jsonify({'message': 'Logged out successfully'})
 
+@app.route('/submit_location', methods=['POST'])
+@login_required
+def submit_location():
+    try:
+        data = request.json
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
+        name = data.get('name', f"Location at {latitude}, {longitude}")
+        notification_lead_time = data.get('notification_lead_time', 24)
+        cloud_coverage_threshold = data.get('cloud_coverage_threshold', 15.0)
+        
+        if not latitude or not longitude:
+            return jsonify({'error': 'Latitude and longitude are required'}), 400
+        
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO locations (name, latitude, longitude, user_id, notification_lead_time, cloud_coverage_threshold)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (name, float(latitude), float(longitude), current_user.id, int(notification_lead_time), float(cloud_coverage_threshold)))
+                conn.commit()
+                
+                cursor.execute("SELECT * FROM locations WHERE id = LAST_INSERT_ID()")
+                new_location = cursor.fetchone()
+        
+        # Fetch Landsat data (implement this function)
+        landsat_data = get_landsat_data(latitude, longitude)
+        
+        return jsonify({
+            'message': f'Saved location: {name}',
+            'location': new_location,
+            'landsat_data': landsat_data
+        })
+    except Exception as e:
+        app.logger.error(f"Error in submit_location: {str(e)}")
+        return jsonify({'error': 'An error occurred while submitting the location'}), 500
+
+def check_and_notify():
+    with app.app_context():
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM locations WHERE notify = TRUE")
+                locations = cursor.fetchall()
+                
+        for location in locations:
+            start_date = datetime.now() + timedelta(hours=location['notification_lead_time'])
+            end_date = start_date + timedelta(days=1)
+            overpasses = get_landsat_overpasses(location['latitude'], location['longitude'], start_date, end_date)
+            if overpasses:
+                next_pass = overpasses[0]
+                cursor.execute("SELECT email FROM users WHERE id = %s", (location['user_id'],))
+                user = cursor.fetchone()
+                if user:
+                    message = Message("Upcoming Landsat Pass",
+                                      sender=app.config['MAIL_USERNAME'],
+                                      recipients=[user['email']])
+                    message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location['name']}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
+                    mail.send(message)
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=check_and_notify, trigger="interval", hours=24)
+scheduler.start()
+
+@app.teardown_appcontext
+def shutdown_scheduler(error=None):
+    if scheduler.running:
+        scheduler.shutdown()
+
+
+def get_landsat_sr_data(latitude, longitude, date):
+    url = f"https://landsatlook.usgs.gov/data/v1/sr?lat={latitude}&lon={longitude}&date={date}"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return data
+    except requests.RequestException as e:
+        print(f"Error fetching Landsat SR data: {e}")
+        return None
+    
 app.route('/get_landsat_data', methods=['POST'])
 def get_landsat_data():
     data = request.json
@@ -158,6 +230,7 @@ def get_landsat_data():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
 
 def get_landsat_overpasses(latitude, longitude, start_date, end_date):
     url = "https://landsat.usgs.gov/landsat_acquisition_api/v1/acqs"
@@ -185,72 +258,5 @@ def get_landsat_overpasses(latitude, longitude, start_date, end_date):
         print(f"Error fetching Landsat overpass data: {e}")
         return []
 
-@app.route('/get_locations', methods=['GET'])
-@login_required
-def get_locations():
-    locations = Location.query.filter_by(user=current_user).order_by(Location.created_at.desc()).all()
-    return jsonify([location.to_dict() for location in locations])
-
-@app.route('/submit_location', methods=['POST'])
-@login_required
-def submit_location():
-    data = request.json
-    latitude = data.get('latitude')
-    longitude = data.get('longitude')
-    name = data.get('name', f"Location at {latitude}, {longitude}")
-    notification_lead_time = data.get('notification_lead_time', 24)
-    cloud_coverage_threshold = data.get('cloud_coverage_threshold', 15.0)
-    date = datetime.now().strftime("%Y-%m-%d")
-    sr_data = get_landsat_sr_data(latitude, longitude, date)
-
-    
-    new_location = Location(
-        name=name,
-        latitude=latitude,
-        longitude=longitude,
-        user=current_user,
-        notification_lead_time=notification_lead_time,
-        cloud_coverage_threshold=cloud_coverage_threshold
-    )
-    db.session.add(new_location)
-    db.session.commit()
-    
-    start_date = datetime.now()
-    end_date = start_date + timedelta(days=16)
-    overpasses = get_landsat_overpasses(latitude, longitude, start_date, end_date)
-    
-    return jsonify({
-        'message': f'Saved location: {name}',
-        'location': new_location.to_dict(),
-        'overpasses': overpasses,
-        'sr_data': sr_data
-    })
-
-def check_and_notify():
-    with app.app_context():
-        locations = Location.query.filter_by(notify=True).all()
-        for location in locations:
-            start_date = datetime.now() + timedelta(hours=location.notification_lead_time)
-            end_date = start_date + timedelta(days=1)
-            overpasses = get_landsat_overpasses(location.latitude, location.longitude, start_date, end_date)
-            if overpasses:
-                next_pass = overpasses[0]
-                message = Message("Upcoming Landsat Pass",
-                                  sender=app.config['MAIL_USERNAME'],
-                                  recipients=[location.user.email])
-                message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location.name}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
-                mail.send(message)
-
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=check_and_notify, trigger="interval", hours=24)
-scheduler.start()
-
-@app.teardown_appcontext
-def shutdown_scheduler(error=None):
-    if scheduler.running:
-        scheduler.shutdown()
-
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True)
+    app.run(debug=False)
