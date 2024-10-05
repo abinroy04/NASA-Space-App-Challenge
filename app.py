@@ -9,15 +9,40 @@ import os
 import pymysql
 from pymysql.cursors import DictCursor
 
+class Location:
+    def __init__(self, id, name, latitude, longitude, notify, notification_lead_time, cloud_coverage_threshold, created_at, user_id):
+        self.id = id
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        self.notify = notify
+        self.notification_lead_time = notification_lead_time
+        self.cloud_coverage_threshold = cloud_coverage_threshold
+        self.created_at = created_at
+        self.user_id = user_id
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
+            'notify': self.notify,
+            'notification_lead_time': self.notification_lead_time,
+            'cloud_coverage_threshold': self.cloud_coverage_threshold,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'user_id': self.user_id
+        }
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'fallback_secret_key')
 
 # Database configuration
 db_config = {
     'host': os.environ.get('DB_HOST', 'localhost'),
-    'user': os.environ.get('DB_USER', 'your_username'),
-    'password': os.environ.get('DB_PASSWORD', 'your_password'),
-    'db': os.environ.get('DB_NAME', 'landsat_app'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', '12345'),
+    'db': os.environ.get('DB_NAME', 'abintest'),
     'charset': 'utf8mb4',
     'cursorclass': DictCursor
 }
@@ -26,8 +51,8 @@ db_config = {
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.example.com')
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
 app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True').lower() == 'true'
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'your_email@example.com')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'your_password')
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME', 'abinr.csa2226@saintgits.org')
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD', 'abin@saintgits')
 
 mail = Mail(app)
 
@@ -138,42 +163,68 @@ def submit_location():
                 conn.commit()
                 
                 cursor.execute("SELECT * FROM locations WHERE id = LAST_INSERT_ID()")
-                new_location = cursor.fetchone()
+                new_location_data = cursor.fetchone()
+                
+                new_location = Location(
+                    id=new_location_data['id'],
+                    name=new_location_data['name'],
+                    latitude=new_location_data['latitude'],
+                    longitude=new_location_data['longitude'],
+                    notify=new_location_data['notify'],
+                    notification_lead_time=new_location_data['notification_lead_time'],
+                    cloud_coverage_threshold=new_location_data['cloud_coverage_threshold'],
+                    created_at=new_location_data['created_at'],
+                    user_id=new_location_data['user_id']
+                )
         
         # Fetch Landsat data (implement this function)
         landsat_data = get_landsat_data(latitude, longitude)
         
         return jsonify({
             'message': f'Saved location: {name}',
-            'location': new_location,
+            'location': new_location.to_dict(),
             'landsat_data': landsat_data
         })
     except Exception as e:
         app.logger.error(f"Error in submit_location: {str(e)}")
         return jsonify({'error': 'An error occurred while submitting the location'}), 500
 
+
 def check_and_notify():
     with app.app_context():
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM locations WHERE notify = TRUE")
-                locations = cursor.fetchall()
+                locations_data = cursor.fetchall()
                 
-        for location in locations:
-            start_date = datetime.now() + timedelta(hours=location['notification_lead_time'])
+        for location_data in locations_data:
+            location = Location(
+                id=location_data['id'],
+                name=location_data['name'],
+                latitude=location_data['latitude'],
+                longitude=location_data['longitude'],
+                notify=location_data['notify'],
+                notification_lead_time=location_data['notification_lead_time'],
+                cloud_coverage_threshold=location_data['cloud_coverage_threshold'],
+                created_at=location_data['created_at'],
+                user_id=location_data['user_id']
+            )
+            
+            start_date = datetime.now() + timedelta(hours=location.notification_lead_time)
             end_date = start_date + timedelta(days=1)
-            overpasses = get_landsat_overpasses(location['latitude'], location['longitude'], start_date, end_date)
+            overpasses = get_landsat_overpasses(location.latitude, location.longitude, start_date, end_date)
             if overpasses:
                 next_pass = overpasses[0]
-                cursor.execute("SELECT email FROM users WHERE id = %s", (location['user_id'],))
-                user = cursor.fetchone()
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("SELECT email FROM users WHERE id = %s", (location.user_id,))
+                        user = cursor.fetchone()
                 if user:
                     message = Message("Upcoming Landsat Pass",
                                       sender=app.config['MAIL_USERNAME'],
                                       recipients=[user['email']])
-                    message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location['name']}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
+                    message.body = f"Hello,\n\nThere is an upcoming Landsat pass for your location '{location.name}' at {next_pass}.\n\nBest regards,\nLandsat Notification System"
                     mail.send(message)
-
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=check_and_notify, trigger="interval", hours=24)
 scheduler.start()
