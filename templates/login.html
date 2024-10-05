@@ -54,6 +54,7 @@
             color: red;
             font-size: 14px;
             margin-bottom: 10px;
+            text-align: center;
         }
         p {
             text-align: center;
@@ -84,16 +85,23 @@
         document.getElementById('login-form').addEventListener('submit', function(e) {
             e.preventDefault();
             const errorMessage = document.getElementById('error-message');
+
+            // Clear any previous error messages
+            errorMessage.textContent = '';
+
+            // Fetch the login request
             fetch('/login', {
                 method: 'POST',
                 body: new FormData(this),
             })
             .then(response => response.json())
             .then(data => {
-                if (data.error) {
+                // Handle the success or error messages
+                if (data.status === 'fail') {
                     errorMessage.textContent = data.error;
-                } else {
-                    window.location.href = '/';
+                } else if (data.status === 'success') {
+                    alert(${data.message}); // Show an alert on success
+                    window.location.href = '/index'; // Redirect to the home page
                 }
             })
             .catch(error => {
