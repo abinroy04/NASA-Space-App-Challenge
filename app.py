@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify
 from flask_mail import Mail, Message
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -8,10 +8,6 @@ from datetime import datetime, timedelta
 import os
 import pymysql
 from pymysql.cursors import DictCursor
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
 
 class Location:
     def __init__(self, id, name, latitude, longitude, notify, notification_lead_time, cloud_coverage_threshold, created_at, user_id):
@@ -88,8 +84,8 @@ def get_db_connection():
     return pymysql.connect(**db_config)
 
 @app.route('/')
-def login_page():
-    return render_template('login.html')
+def index():
+    return render_template('index.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -99,18 +95,19 @@ def register():
         password = request.form.get('password')
         
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-                if cursor.fetchone():
-                    return jsonify({'error': 'Username already exists'}), 400
-
-                password_hash = generate_password_hash(password)
-                cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
-                                   (username, email, password_hash))
-                conn.commit()
+            if conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                    if cursor.fetchone():
+                        return jsonify({'error': 'Username already exists'}), 400
                     
-                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-                user = cursor.fetchone()
+                    password_hash = generate_password_hash(password)
+                    cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
+                                   (username, email, password_hash))
+                    conn.commit()
+                    
+                    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                    user = cursor.fetchone()
                     
         new_user = User(user['id'], user['username'], user['email'], user['password_hash'])
         login_user(new_user)
@@ -130,23 +127,14 @@ def login():
                 cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
                 user = cursor.fetchone()
                 
-                # Log the fetched user data for debugging
-                logging.debug(f"Fetched user: {user}")
-
         if user and check_password_hash(user['password_hash'], password):
             user_obj = User(user['id'], user['username'], user['email'], user['password_hash'])
             login_user(user_obj)
             return jsonify({'message': 'Logged in successfully'})
         
-        logging.warning(f"Login failed for user: {username}")
         return jsonify({'error': 'Invalid username or password'}), 401
     
     return render_template('login.html')
-
-@app.route('/index')
-@login_required
-def index():
-    return render_template('index.html')
 
 @app.route('/logout')
 @login_required
@@ -202,6 +190,7 @@ def submit_location():
     except Exception as e:
         app.logger.error(f"Error in submit_location: {str(e)}")
         return jsonify({'error': 'An error occurred while submitting the location'}), 500
+
 
 def check_and_notify():
     with app.app_context():
