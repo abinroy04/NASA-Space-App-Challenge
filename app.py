@@ -95,24 +95,26 @@ def register():
         password = request.form.get('password')
         
         with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-                if cursor.fetchone():
-                    return jsonify({'error': 'Username already exists'}), 400
-                
-                password_hash = generate_password_hash(password)
-                cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
-                               (username, email, password_hash))
-                conn.commit()
-                
-                cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-                user = cursor.fetchone()
-                
+            if conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                    if cursor.fetchone():
+                        return jsonify({'error': 'Username already exists'}), 400
+                    
+                    password_hash = generate_password_hash(password)
+                    cursor.execute("INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)",
+                                   (username, email, password_hash))
+                    conn.commit()
+                    
+                    cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+                    user = cursor.fetchone()
+                    
         new_user = User(user['id'], user['username'], user['email'], user['password_hash'])
         login_user(new_user)
         return jsonify({'message': 'Registered successfully'})
     
     return render_template('register.html')
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
