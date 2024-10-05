@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Landsat Comparison App</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}"/>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="user-status">
+        {% if current_user.is_authenticated %}
+            <p>Welcome, {{ current_user.username }}! <a href="#" id="logout-link">Logout</a></p>
+        {% else %}
+            <p><a href="/login">Login</a> or <a href="/register">Register</a></p>
+        {% endif %}
+    </div>
+    <div id="app">
+        <h1>Landsat Comparison App</h1>
+        <div id="map"></div>
+        <div id="location-input">
+            <input type="text" id="location-name" placeholder="Location Name">
+            <input type="text" id="latitude" placeholder="Latitude">
+            <input type="text" id="longitude" placeholder="Longitude">
+            <input type="number" id="cloud-coverage" placeholder="Cloud Coverage Threshold (%)" min="0" max="100" step="0.1">
+            <input type="number" id="notification-lead-time" placeholder="Notification Lead Time (hours)" min="1" step="1">
+            <button id="submit-location">Submit Location</button>
+        </div>
+        <div id="result"></div>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <canvas id="sr-chart"></canvas>
+    <script>
+        document.getElementById('logout-link')?.addEventListener('click', function(e) {
+            e.preventDefault();
+            fetch('/logout')
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    window.location.reload();
+                    const ctx = document.getElementById('sr-chart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.sr_data.wavelengths,
+                    datasets: [{
+                        label: 'Blue',
+                        data: data.sr_data.blue,
+                        borderColor: 'blue',
+                        fill: false
+                    }, {
+                        label: 'Green',
+                        data: data.sr_data.green,
+                        borderColor: 'green',
+                        fill: false
+                    }, {
+                        label: 'Red',
+                        data: data.sr_data.red,
+                        borderColor: 'red',
+                        fill: false
+                    }, {
+                        label: 'NIR',
+                        data: data.sr_data.nir,
+                        borderColor: 'purple',
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    title: {
+                        display: true,
+                        text: 'Landsat SR Data'
+                    },
+                    scales: {
+                        xAxes: [{
+                            display: true,
+                            scaleLabel: {
+                                display: true,
+                                labelString: 'Wavelength (nm)'
+                            }
+                        }],
+                        yAxes: [{
+                            display: true,
+                            scaleLabel: {
+                                display: true,
+                                labelString: 'Surface Reflectance'
+                            }
+                        }]
+                    }
+                }
+            });
+        })
+    });
+    </script>
+</body>
+</html>
